@@ -115,6 +115,9 @@
 #ifdef HAVE_DRM_H
 #include <libdrm/drm.h>
 #endif
+#ifdef CONFIG_OPENAT2
+#include <linux/openat2.h>
+#endif
 #include "linux_loop.h"
 #include "uname.h"
 
@@ -755,6 +758,10 @@ safe_syscall3(ssize_t, read, int, fd, void *, buff, size_t, count)
 safe_syscall3(ssize_t, write, int, fd, const void *, buff, size_t, count)
 safe_syscall4(int, openat, int, dirfd, const char *, pathname, \
               int, flags, mode_t, mode)
+#if defined(TARGET_NR_openat2) && defined(CONFIG_OPENAT2)
+safe_syscall4(int, openat, int, dirfd, const char *, pathname, \
+              struct open_how *, how, size_t, size)
+#endif
 #if defined(TARGET_NR_wait4) || defined(TARGET_NR_waitpid)
 safe_syscall4(pid_t, wait4, pid_t, pid, int *, status, int, options, \
               struct rusage *, rusage)
@@ -7594,7 +7601,13 @@ static int open_hardware(void *cpu_env, int fd)
 }
 #endif
 
-static int do_openat(void *cpu_env, int dirfd, const char *pathname, int flags, mode_t mode)
+#ifdef CONFIG_OPENAT2
+static int do_openat(void *cpu_env, int dirfd, const char *pathname,
+                     int flags, mode_t mode, struct open_how *how, size_t size)
+#else
+static int do_openat(void *cpu_env, int dirfd, const char *pathname,
+                     int flags, mode_t mode)
+#endif
 {
     struct fake_open {
         const char *filename;
@@ -7621,7 +7634,18 @@ static int do_openat(void *cpu_env, int dirfd, const char *pathname, int flags, 
 
     if (is_proc_myself(pathname, "exe")) {
         int execfd = qemu_getauxval(AT_EXECFD);
-        return execfd ? execfd : safe_openat(dirfd, exec_path, flags, mode);
+        if (execfd) {
+            return execfd;
+        }
+#ifdef CONFIG_OPENAT2
+        if (how) {
+            return safe_openat2(dirfd, exec_path, how, size);
+        } else {
+            return safe_openat(dirfd, exec_path, flags, mode);
+        }
+#else
+        return safe_openat(dirfd, exec_path, flags, mode);
+#endif
     }
 
     for (fake_open = fakes; fake_open->filename; fake_open++) {
@@ -7656,8 +7680,15 @@ static int do_openat(void *cpu_env, int dirfd, const char *pathname, int flags, 
 
         return fd;
     }
-
+#ifdef CONFIG_OPENAT2
+    if (how) {
+        return safe_openat2(dirfd, path(pathname), how, size);
+    } else {
+        return safe_openat(dirfd, path(pathname), flags, mode);
+    }
+#else
     return safe_openat(dirfd, path(pathname), flags, mode);
+#endif
 }
 
 #define TIMER_MAGIC 0x0caf0000
@@ -7851,9 +7882,15 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
     case TARGET_NR_open:
         if (!(p = lock_user_string(arg1)))
             return -TARGET_EFAULT;
+#ifdef CONFIG_OPENAT2
+        ret = get_errno(do_openat(cpu_env, AT_FDCWD, p,
+                                  target_to_host_bitmask(arg2, fcntl_flags_tbl),
+                                  arg3, NULL, 0));
+#else
         ret = get_errno(do_openat(cpu_env, AT_FDCWD, p,
                                   target_to_host_bitmask(arg2, fcntl_flags_tbl),
                                   arg3));
+#endif
         fd_trans_unregister(ret);
         unlock_user(p, arg1, 0);
         return ret;
@@ -7861,12 +7898,44 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
     case TARGET_NR_openat:
         if (!(p = lock_user_string(arg2)))
             return -TARGET_EFAULT;
+#ifdef CONFIG_OPENAT2
+        ret = get_errno(do_openat(cpu_env, arg1, p,
+                                  target_to_host_bitmask(arg3, fcntl_flags_tbl),
+                                  arg4, NULL, 0));
+#else
         ret = get_errno(do_openat(cpu_env, arg1, p,
                                   target_to_host_bitmask(arg3, fcntl_flags_tbl),
                                   arg4));
+#endif
         fd_trans_unregister(ret);
         unlock_user(p, arg2, 0);
         return ret;
+#if defined(TARGET_NR_openat2) && defined(CONFIG_OPENAT2)
+    case TARGET_NR_openat2:
+      struct open_how host_how;
+      struct open_how *target_how;
+
+      if (!(p = lock_user_string(arg2))) {
+          return -TARGET_EFAULT;
+      }
+
+      target_how = lock_user(VERIFY_READ, arg3, sizeof(*target_how), 1);
+      if (!target_how) {
+          return -TARGET_EFAULT;
+      }
+
+      host_how.flags = target_to_host_bitmask(target_how->flags,
+                                              fcntl_flags_tbl);
+      host_how.mode = tswap64(target_how->mode);
+      host_how.resolve = tswap64(target_how->mode);
+
+      ret = get_errno(do_openat(cpu_env, arg1, p, 0, 0, &host_how, arg4));
+
+      fd_trans_unregister(ret);
+      unlock_user(target_how, arg3, 0);
+      unlock_user(p, arg2, 0);
+      return ret;
+#endif
 #if defined(TARGET_NR_name_to_handle_at) && defined(CONFIG_OPEN_BY_HANDLE)
     case TARGET_NR_name_to_handle_at:
         ret = do_name_to_handle_at(arg1, arg2, arg3, arg4, arg5);

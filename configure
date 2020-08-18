@@ -5079,6 +5079,12 @@ if check_include sys/kcov.h ; then
     kcov=yes
 fi
 
+# check support for syscall 'openat2()' (kernel must 5.6+)
+openat2=no
+if check_include linux/openat2.h ; then
+    openat2=yes
+fi
+
 # If we're making warnings fatal, apply this to Sphinx runs as well
 sphinx_werror=""
 if test "$werror" = "yes"; then
@@ -7329,6 +7335,9 @@ if test "$syncfs" = "yes" ; then
 fi
 if test "$kcov" = "yes" ; then
   echo "CONFIG_KCOV=y" >> $config_host_mak
+fi
+if test "$openat2" = "yes" ; then
+  echo "CONFIG_OPENAT2" >> $config_host_mak
 fi
 if test "$inotify" = "yes" ; then
   echo "CONFIG_INOTIFY=y" >> $config_host_mak
