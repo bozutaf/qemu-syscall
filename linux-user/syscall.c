@@ -845,6 +845,10 @@ safe_syscall5(int, mq_timedsend, int, mqdes, const char *, msg_ptr,
 safe_syscall5(int, mq_timedreceive, int, mqdes, char *, msg_ptr,
               size_t, len, unsigned *, prio, const struct timespec *, timeout)
 #endif
+#ifdef TARGET_NR_copy_file_range
+safe_syscall6(ssize_t, copy_file_range, int, fd_in, loff_t *, off_in,
+              int, fd_out, loff_t *, off_out, size_t, len, unsigned int, flags)
+#endif
 /* We do ioctl like this rather than via safe_syscall3 to preserve the
  * "third argument might be integer or pointer or not present" behaviour of
  * the libc function.
@@ -7922,6 +7926,34 @@ static abi_long do_syscall1(void *cpu_env, int num, abi_long arg1,
         fd_trans_unregister(ret);
         unlock_user(p, arg1, 0);
         return ret;
+#endif
+#ifdef TARGET_NR_copy_file_range
+    case TARGET_NR_copy_file_range:
+    {
+        loff_t *off_in = NULL;
+        loff_t *off_out = NULL;
+        if (arg2) {
+            off_in = lock_user(VERIFY_WRITE, arg2, sizeof(loff_t), 1);
+            if (!off_in) {
+                return -TARGET_EFAULT;
+            }
+        }
+        if (arg4) {
+            off_out = lock_user(VERIFY_WRITE, arg4, sizeof(loff_t), 1);
+            if (!off_out) {
+                return -TARGET_EFAULT;
+            }
+        }
+        ret = get_errno(safe_copy_file_range(arg1, off_in, arg3,
+                        off_out, arg5, tswap32(arg6)));
+        if (off_in) {
+            unlock_user(off_in, arg2, sizeof(loff_t));
+        }
+        if (off_out) {
+            unlock_user(off_out, arg4, sizeof(loff_t));
+        }
+        return ret;
+    }
 #endif
 #ifdef TARGET_NR_link
     case TARGET_NR_link:
